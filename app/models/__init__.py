@@ -2,6 +2,6 @@
 
 from .responses import ErrorResponse, KeyResponse
 from .requests import KeyRequest
-from .faq import Faq, FaqId, FaqWithScore
+from .faq import Faq, FaqId, FaqWithScore, FaqCreate, FaqSearchRequest
 
-__all__ = ["ErrorResponse", "KeyResponse", "KeyRequest", "Faq", "FaqId", "FaqWithScore"]
+__all__ = ["ErrorResponse", "KeyResponse", "KeyRequest", "Faq", "FaqId", "FaqWithScore", "FaqCreate", "FaqSearchRequest"]

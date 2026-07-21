@@ -13,3 +13,11 @@ class Faq(FaqId):
 
 class FaqWithScore(Faq):
     score: float
+
+class FaqCreate(BaseModel):
+    question: str
+    answer: str
+    embedding: str
+
+class FaqSearchRequest(BaseModel):
+    query: str  # The text query like "where is my refund"

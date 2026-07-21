@@ -6,8 +6,9 @@ from app.models import Faq, FaqId, FaqWithScore
 
 
 class FaqService:
-    def __init__(self, redis_client):
+    def __init__(self, redis_client, embedding_service):
         self.redis = redis_client
+        self.embedding_service = embedding_service
 
     async def create(self, question: str, answer: str, embedding: str) -> Faq:
         # Generate a new ULID for the item
@@ -35,12 +36,12 @@ class FaqService:
             embedding=embedding,
         )
 
-    def read(self, ulid: str) -> Faq:
+    async def read(self, ulid: str) -> Faq:
         # The key for the item in Redis
-        key = f"item:{ulid}"
+        key = f"faq:{ulid}"
 
         # Get the item's fields from Redis
-        item = self.redis.hgetall(key)
+        item = await self.redis.hgetall(key)
 
         # If the item doesn't exist, return None
         if not item:
@@ -54,18 +55,18 @@ class FaqService:
             embedding=base64.b64encode(item[b"embedding"]).decode("utf-8"),
         )
 
-    def update(
+    async def update(
         self, ulid: str, question: str, answer: str, embedding: str
     ) -> Faq:
         # The key for the item in Redis
         key = f"faq:{ulid}"
 
         # Check if the item exists
-        if self.redis.exists(key) > 0:
+        if await self.redis.exists(key) == 0:
             return None
 
         # Update the item's fields in Redis
-        self.redis.hset(
+        await self.redis.hset(
             key,
             mapping={
                 "ulid": ulid,
@@ -83,17 +84,17 @@ class FaqService:
             embedding=embedding,
         )
 
-    def delete(self, ulid: str) -> FaqId:
+    async def delete(self, ulid: str) -> FaqId:
         # The key for the item in Redis
-        key = f"item:{ulid}"
+        key = f"faq:{ulid}"
 
         # Remove the item from Redis, returning the number of deleted keys
-        count = self.redis.unlink(key)
+        count = await self.redis.unlink(key)
 
         # If the item was deleted, return its ID, otherwise return None
         return FaqId(ulid=ulid) if count > 0 else None
 
-    def search(self, embedding: str) -> list[FaqWithScore]:
+    async def search(self, embedding: str) -> list[FaqWithScore]:
         # Create a query to search for items based on the embedding
         query = Query("(*)=>[KNN 4 @embedding $blob as score]")
         query.sort_by("score")
@@ -104,39 +105,67 @@ class FaqService:
         query.dialect(3)
 
         # Decode the base64-encoded embedding and set it as a parameter
-        bytes = base64.b64decode(embedding)
-        query_params = {"blob": bytes}
+        embedding_bytes = base64.b64decode(embedding)
+        query_params = {"blob": embedding_bytes}
 
         # Execute the search query
-        response = self.redis.ft("item:index").search(query, query_params)
-        results = response[b"results"]
-
+        response = await self.redis.ft("faq:index").search(query, query_params)
+        
         # A place to store the found items
         found_items = []
 
-        # Iterate through the results and extract the relevant fields
-        # and convert them to the ItemWithScore model
-        for result in results:
-            # get the attributes from the result
-            attributes = result[b"extra_attributes"]
+        # Handle dictionary response format from Redis (keys are in bytes)
+        if isinstance(response, dict) and b'results' in response:
+            results = response[b'results']
+            
+            for result in results:
+                try:
+                    # Extract document ID and attributes - Redis returns bytes keys
+                    doc_id = result[b'id'].decode('utf-8') if b'id' in result else ''
+                    attributes = result[b'extra_attributes'] if b'extra_attributes' in result else {}
+                    
+                    # Get the attributes (these are also bytes keys) and decode them
+                    ulid_bytes = attributes.get(b'ulid', b'')
+                    question_bytes = attributes.get(b'question', b'')
+                    answer_bytes = attributes.get(b'answer', b'')
+                    embedding_bytes = attributes.get(b'embedding', b'')
+                    score_bytes = attributes.get(b'score', b'1.0')
+                    
+                    # Decode bytes to strings
+                    ulid = ulid_bytes.decode('utf-8') if ulid_bytes else doc_id.split(':')[-1]
+                    question = question_bytes.decode('utf-8') if question_bytes else ''
+                    answer = answer_bytes.decode('utf-8') if answer_bytes else ''
+                    score = score_bytes.decode('utf-8') if score_bytes else '1.0'
+                    
+                    # Handle embedding data
+                    if embedding_bytes:
+                        embedding_b64 = base64.b64encode(embedding_bytes).decode("utf-8")
+                    else:
+                        embedding_b64 = ""
 
-            # get the desired attributes
-            ulid = attributes[b"ulid"].decode("utf-8")
-            question = attributes[b"question"].decode("utf-8")
-            answer = attributes[b"answer"].decode("utf-8")
-            embedding = attributes[b"embedding"]
-            score = attributes[b"score"]
-
-            # add the found item to the list
-            found_items.append(
-                FaqWithScore(
-                    ulid=ulid,
-                    question=question,
-                    answer=answer,
-                    embedding=base64.b64encode(embedding).decode("utf-8"),
-                    score=score,
-                )
-            )
+                    # Add the found item to the list
+                    found_items.append(
+                        FaqWithScore(
+                            ulid=ulid,
+                            question=question,
+                            answer=answer,
+                            embedding=embedding_b64,
+                            score=float(score),
+                        )
+                    )
+                except Exception:
+                    # Skip documents that can't be parsed
+                    continue
 
         # return the found items
         return found_items
+    
+    async def search_by_text(self, query_text: str) -> list[FaqWithScore]:
+        """
+        Search for FAQs using a text query (converts to embedding internally).
+        """
+        # Convert text query to embedding
+        embedding = self.embedding_service.text_to_embedding(query_text)
+        
+        # Use existing search method with the generated embedding
+        return await self.search(embedding)

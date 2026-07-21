@@ -28,15 +28,15 @@ sync_db = redis.Redis(host=host, port=port, protocol=3, decode_responses=False)
 # the index definition
 definition = IndexDefinition(prefix=prefixes, index_type=index_type)
 
-# the schema for the index treats the title and author as text fields
-# and the embedding as a vector field
+# the schema for the index treats the question and answer as text fields
+# and the embedding as a vector field (384 dims for all-MiniLM-L6-v2)
 schema = (
     TextField("question"),
     TextField("answer"),
     VectorField(
         "embedding",
         "FLAT",
-        {"TYPE": "FLOAT32", "DIM": 512, "DISTANCE_METRIC": "COSINE"},
+        {"TYPE": "FLOAT32", "DIM": 384, "DISTANCE_METRIC": "COSINE"},
     ),
 )
 
